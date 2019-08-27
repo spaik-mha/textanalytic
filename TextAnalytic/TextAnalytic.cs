@@ -1,11 +1,11 @@
 ﻿using Microsoft.Azure.CognitiveServices.Language.TextAnalytics;
 using Microsoft.Azure.CognitiveServices.Language.TextAnalytics.Models;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Rest;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,18 +14,18 @@ namespace TextAnalytic
 {
     public class TextAnalytic
     {
-        private bool _defaultProcedure = true;
-        private string _filePath = "";
+        private readonly string _filePath = "";
         private TextAnalyticsClient _client;
-        private string _apiKey;
-        private string _endpoint;
+        private readonly string _apiKey;
+        private readonly string _endpoint;
+        private readonly string connectionString;
 
-        public TextAnalytic( string apikey, string endpoint, bool isDemo = true, string filePath = "")
+        public TextAnalytic(string apikey, string endpoint, string connection, string filePath = "")
         {
-            _defaultProcedure = isDemo;
             _filePath = filePath;
             _apiKey = apikey;
             _endpoint = endpoint;
+            connectionString = connection;
             InitializeClient();
         }
 
@@ -39,72 +39,26 @@ namespace TextAnalytic
 
         }
 
-        public void Run()
+        public string Run()
         {
-            if (_defaultProcedure)
-            {
-                RunDemo();
-            }
-            else
-            {
-                ReadFileSentiment();
-            }
+            return String.IsNullOrWhiteSpace(_filePath) ? RunDemo() : ReadFileSentiment();
         }
 
-        private void RunDemo()
+        private string RunDemo()
         {
             MultiLanguageBatchInput batchInputs = new MultiLanguageBatchInput()
             {
-                Documents = new List<MultiLanguageInput>()
-                    {
-                            new MultiLanguageInput()
-                        {
-                            Id = "Positive Sentence",
-                            Text = "I had the best day of my life."
-                        },
-                        new MultiLanguageInput()
-                        {
-                            Id = "Negative Sentence",
-                            Text = "This was the worst pie."
-                        },
-                        new MultiLanguageInput()
-                        {
-                            Id = "Neutral Sentence",
-                            Text = "It rains in Spain."
-                        },
-                        new MultiLanguageInput()
-                        {
-                            Id = "Positive Text",
-                            Text = "I went to the circus the other day. The train was late. I stubbed my toe. But, overall, it wasn't that bad."
-                        },
-                        new MultiLanguageInput()
-                        {
-                            Id = "Bad Grammar",
-                            Text = "If I had before known that what was truthfully stated was not I would not have trusted thee."
-                        },
-                        new MultiLanguageInput()
-                        {
-                            Id = "Sarcasm",
-                            Text = "Wow, the circus was really crowded and hot. Someone stepped on my foot. Best day ever."
-                        },
-                    }
+                Documents = FetchCommentsFromDB(connectionString)
             };
-
             var sentimentPrediction = _client.SentimentBatch(batchInputs);
-            foreach (var prediction in sentimentPrediction.Documents)
-            {
-                var sentiment = prediction.Score;
-                var id = prediction.Id;
-                var text = batchInputs.Documents.Where(x => x.Id == id).Select(x => x.Text).FirstOrDefault();
-                Console.WriteLine($"Id: {id}");
-                Console.WriteLine($"Text: {text}");
-                Console.WriteLine($"Sentiment: {sentiment}");
-                Console.WriteLine("-------------------------------------------------------------------");
-            }
+            string analysis = JsonConvert.SerializeObject(sentimentPrediction);
+
+            return analysis;
         }
 
-        private void ReadFileSentiment()
+        private string ReadFileSentiment()
         {
+            string analysis = "";
             try
             {   // Open the text file using a stream reader.
                 using (StreamReader sr = new StreamReader(_filePath))
@@ -112,10 +66,7 @@ namespace TextAnalytic
                     // Read the stream to a string, and write the string to the console.
                     String line = sr.ReadToEnd();
                     var sentiment = _client.Sentiment(line);
-                    Console.WriteLine("-------------------------------------------------------------------");
-                    Console.WriteLine($"Text: {line}");
-                    Console.WriteLine($"Sentiment: {sentiment.Score}");
-                    Console.WriteLine("-------------------------------------------------------------------");
+                    analysis = JsonConvert.SerializeObject(sentiment);
                 }
             }
             catch (IOException e)
@@ -123,35 +74,108 @@ namespace TextAnalytic
                 Console.WriteLine("The file could not be read:");
                 Console.WriteLine(e.Message);
             }
+            return analysis;
         }
 
-    }
-
-        //static void SentimentAnalysis(TextAnalyticsClient client)
-        //{
-        //    var result = client.Sentiment("I had the best day of my life.", "en");
-        //    Console.WriteLine($"Sentiment Score: {result.Score:0.00}");
-        //}
-
-        class ApiKeyServiceClientCredentials : ServiceClientCredentials
+        private List<MultiLanguageInput> FetchCommentsFromDB(string ConnectionString)
         {
-            private readonly string apiKey;
-
-            public ApiKeyServiceClientCredentials(string apiKey)
+            List<MultiLanguageInput> comments = new List<MultiLanguageInput>();
+            using (var connection = new SqlConnection(ConnectionString))
             {
-                this.apiKey = apiKey;
-            }
-
-            public override Task ProcessHttpRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            {
-                if (request == null)
+                try
                 {
-                    throw new ArgumentNullException("request");
+                    connection.Open();
+                    using (var fetchComments = new SqlCommand("SELECT TOP 100 [AP_summary] AS [Text], [Ap_ApId] AS [ID] FROM [dbo].[IM_Appointments] WHERE [AP_summary] IS NOT NULL", connection))
+                    {
+                        using (var commentReader = fetchComments.ExecuteReader())
+                        {
+                            while (commentReader.Read())
+                            {
+                                var comment = new MultiLanguageInput()
+                                {
+                                    Id = commentReader["ID"].ToString(),
+                                    Text = commentReader["Text"].ToString()
+                                };
+                                comments.Add(comment);
+                            }
+                        }
+                    }
                 }
-                request.Headers.Add("Ocp-Apim-Subscription-Key", this.apiKey);
-                return base.ProcessHttpRequestAsync(request, cancellationToken);
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Couldn't read from DB");
+                    Console.WriteLine(ex.Message);
+                }
+                finally
+                {
+                    connection.Close();
+                }
             }
+            return comments;
+        }
+
+        private List<MultiLanguageInput> FetchCommentsFromDB(SqlConnection connection)
+        {
+            List<MultiLanguageInput> comments = new List<MultiLanguageInput>();
+            try
+            {
+                connection.Open();
+                using (var fetchComments = new SqlCommand("SELECT [AP_summary] AS [Text], [Ap_ApId] AS [ID] FROM [dbo].[IM_Appointments] WHERE [AP_summary] IS NOT NULL", connection))
+                {
+                    using (var commentReader = fetchComments.ExecuteReader())
+                    {
+                        while (commentReader.Read())
+                        {
+                            var comment = new MultiLanguageInput()
+                            {
+                                Id = commentReader["ID"].ToString(),
+                                Text = commentReader["Text"].ToString()
+                            };
+                            comments.Add(comment);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Couldn't read from DB");
+                Console.WriteLine(ex.Message);
+            }
+            finally
+            {
+                connection.Close();
+            }
+
+            return comments;
+        }
+
+    }
+
+    //static void SentimentAnalysis(TextAnalyticsClient client)
+    //{
+    //    var result = client.Sentiment("I had the best day of my life.", "en");
+    //    Console.WriteLine($"Sentiment Score: {result.Score:0.00}");
+    //}
+
+    class ApiKeyServiceClientCredentials : ServiceClientCredentials
+    {
+        private readonly string apiKey;
+
+        public ApiKeyServiceClientCredentials(string apiKey)
+        {
+            this.apiKey = apiKey;
+        }
+
+        public override Task ProcessHttpRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException("request");
+            }
+            request.Headers.Add("Ocp-Apim-Subscription-Key", this.apiKey);
+            return base.ProcessHttpRequestAsync(request, cancellationToken);
         }
     }
+}
 
 

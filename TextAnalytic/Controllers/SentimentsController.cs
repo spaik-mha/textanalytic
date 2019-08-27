@@ -1,10 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using System.Collections.Generic;
 
 namespace TextAnalytic.Controllers
 {
@@ -12,26 +8,27 @@ namespace TextAnalytic.Controllers
     [ApiController]
     public class SentimentsController : Controller
     {
-        private string _apikey;
-        private string _endpoint;
+        private readonly string _apikey;
+        private readonly string _endpoint;
+        private readonly string connection;
 
         public SentimentsController(IOptions<CognitiveService> settings)
         {
             _apikey = settings.Value.Apikey;
             _endpoint = settings.Value.Endpoint;
+            connection = settings.Value.Connection;
         }
 
         [HttpGet]
-        public ActionResult<IEnumerable<string>> Get()
+        public ActionResult<string> Get()
         {
-            TextAnalytic textAnalytic = new TextAnalytic(_apikey, _endpoint);
-            textAnalytic.Run();
-            return new string[] { "value1", "value2" };
+            TextAnalytic textAnalytic = new TextAnalytic(_apikey, _endpoint, connection);
+            return textAnalytic.Run();
         }
 
         public IActionResult Index()
         {
-            TextAnalytic textAnalytic = new TextAnalytic(_apikey,_endpoint);
+            TextAnalytic textAnalytic = new TextAnalytic(_apikey, _endpoint, connection);
             return View();
         }
     }
